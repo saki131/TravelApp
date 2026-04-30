@@ -182,10 +182,7 @@ class SerpApiClient:
             "api_key": self.api_key,
         }
 
-        # departure_date が "from,to" 形式の場合は from のみ使用
-        if departure_date:
-            dep = departure_date.split(",")[0].strip() if "," in departure_date else departure_date
-            params["outbound_date"] = dep
+        # google_travel_explore は outbound_date 非対応のため日付パラメータは送らない
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(SERPAPI_BASE_URL, params=params)

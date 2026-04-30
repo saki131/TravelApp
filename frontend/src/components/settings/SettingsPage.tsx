@@ -225,7 +225,7 @@ export default function SettingsPage() {
           </div>
           <div className="flex justify-between">
             <span>データソース</span>
-            <span className="font-medium">Amadeus API / JAL・ANA・LCC RSS</span>
+            <span className="font-medium">Google Flights（SerpApi）/ JAL・ANA・LCC RSS</span>
           </div>
           <div className="flex justify-between">
             <span>AIプランナー</span>

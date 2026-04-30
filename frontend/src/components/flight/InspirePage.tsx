@@ -133,7 +133,7 @@ export default function InspirePage() {
 
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
-            検索に失敗しました。Amadeus API の無料枠（2,000回/月）に達した可能性があります。
+            検索に失敗しました。しばらくしてから再度お試しください。
           </div>
         )}
 
