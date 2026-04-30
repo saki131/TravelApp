@@ -2,30 +2,119 @@
 スケジューラーのジョブ定義
 Cloud Scheduler → POST /internal/jobs/{job_name} → APScheduler が即時実行
 """
+import hashlib
 import logging
+import re
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import SaleEvent
-from services.rss_parser import collect_all_rss
 from services.gemini import detect_flash_sales
 from services.cache import cleanup_expired_cache
+from config import settings
 
 logger = logging.getLogger(__name__)
+
+# SerpApi で検索するセール情報クエリ
+_SALE_QUERIES = [
+    ("peach",        "ピーチ セール タイムセール 格安航空券"),
+    ("jetstar",      "ジェットスター セール タイムセール 格安航空券"),
+    ("spring_japan", "スプリングジャパン セール 格安航空券"),
+    ("jal",          "JAL 特割 タイムセール 格安航空券"),
+    ("ana",          "ANA SUPER VALUE タイムセール"),
+]
+_OFFICIAL_DOMAINS = {
+    "peach":        ["flypeach.com"],
+    "jetstar":      ["jetstar.com"],
+    "spring_japan": ["springjapan.com", "spring-japan.co.jp"],
+    "jal":          ["jal.co.jp"],
+    "ana":          ["ana.co.jp"],
+}
 
 
 def _get_db() -> Session:
     return SessionLocal()
 
 
+async def _search_sale(source: str, query: str) -> list[dict]:
+    params = {
+        "engine": "google",
+        "q": query,
+        "hl": "ja",
+        "gl": "jp",
+        "num": 10,
+        "api_key": settings.SERPAPI_KEY,
+    }
+    async with httpx.AsyncClient(timeout=20) as c:
+        resp = await c.get("https://serpapi.com/search", params=params)
+        raw = resp.json()
+
+    results = []
+    official_domains = _OFFICIAL_DOMAINS.get(source, [])
+    for r in raw.get("organic_results", []):
+        title = r.get("title", "").strip()
+        link = r.get("link", "").strip()
+        snippet = r.get("snippet", "").strip()
+        if not title or not link:
+            continue
+        is_official = any(d in link for d in official_domains)
+
+        price_match = re.search(r"[¥￥]?(\d{1,3}(?:,\d{3})*|\d{3,6})\s*円", snippet)
+        min_price = None
+        if price_match:
+            try:
+                min_price = int(price_match.group(1).replace(",", ""))
+            except Exception:
+                pass
+
+        sale_end = None
+        date_match = re.search(r"(\d{1,2})[/月](\d{1,2})", snippet)
+        if date_match:
+            try:
+                m, d_num = int(date_match.group(1)), int(date_match.group(2))
+                now = datetime.now(timezone.utc)
+                year = now.year if m >= now.month else now.year + 1
+                sale_end = datetime(year, m, d_num, tzinfo=timezone.utc)
+            except Exception:
+                pass
+
+        results.append({
+            "category": "flight",
+            "title": title[:200],
+            "description": snippet[:500] if snippet else None,
+            "sale_end": sale_end,
+            "min_price_jpy": min_price,
+            "booking_url": link,
+            "source": source,
+            "source_url": link,
+            "is_verified": is_official,
+            "external_id": hashlib.md5(link.encode()).hexdigest(),
+        })
+
+    results.sort(key=lambda x: (0 if x["is_verified"] else 1))
+    return results[:3]
+
+
 async def job_collect_rss():
-    """JAL / ANA / LCC の RSS フィードを収集して DB に保存する。"""
+    """SerpApi Google検索で各社のセール情報を収集して DB に保存する（旧RSS収集の代替）。"""
+    if not settings.SERPAPI_KEY:
+        logger.warning("SERPAPI_KEY が未設定のためセール収集をスキップ")
+        return
     db = _get_db()
     try:
-        entries = await collect_all_rss()
+        all_entries = []
+        for source, query in _SALE_QUERIES:
+            try:
+                entries = await _search_sale(source, query)
+                all_entries.extend(entries)
+                logger.info("SerpApi sale collect [%s]: %d件", source, len(entries))
+            except Exception as e:
+                logger.warning("SerpApi sale collect error [%s]: %s", source, e)
+
         saved = 0
-        for entry in entries:
+        for entry in all_entries:
             source = entry.get("source")
             ext_id = entry.get("external_id")
             if not ext_id:
@@ -35,12 +124,17 @@ async def job_collect_rss():
                 SaleEvent.external_id == ext_id,
             ).first()
             if exists:
-                continue
-            event = SaleEvent(**{k: v for k, v in entry.items() if hasattr(SaleEvent, k)})
-            db.add(event)
-            saved += 1
+                # タイトル・説明を最新に更新
+                exists.title = entry["title"]
+                exists.description = entry.get("description")
+                exists.sale_end = entry.get("sale_end")
+                exists.min_price_jpy = entry.get("min_price_jpy")
+            else:
+                event = SaleEvent(**{k: v for k, v in entry.items() if hasattr(SaleEvent, k)})
+                db.add(event)
+                saved += 1
         db.commit()
-        logger.info("RSS collect: %d new events saved", saved)
+        logger.info("SerpApi sale collect: %d new events saved", saved)
     except Exception as e:
         logger.error("job_collect_rss error: %s", e)
         db.rollback()
