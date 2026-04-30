@@ -6,6 +6,7 @@ import { flightApi } from "@/lib/api/flights";
 import { formatPrice } from "@/lib/utils";
 import { Search, ArrowRight } from "lucide-react";
 import type { InspireDestination } from "@/types/flight";
+import AirportInput from "@/components/search/AirportInput";
 
 const BUDGET_OPTIONS = [
   { label: "上限なし", value: 0 },
@@ -50,12 +51,10 @@ export default function InspirePage() {
       <div className="bg-blue-600 text-white px-4 pt-10 pb-5">
         <h1 className="text-lg font-bold mb-4">✈ どこでも検索</h1>
         <form onSubmit={handleSearch} className="space-y-2">
-          <input
+          <AirportInput
             value={origin}
-            onChange={(e) => setOrigin(e.target.value.toUpperCase())}
-            placeholder="出発地（例: HND）"
-            className="w-full rounded-lg px-3 py-2.5 text-gray-800 text-sm focus:outline-none"
-            maxLength={3}
+            onChange={(iata) => { if (iata) setOrigin(iata); }}
+            placeholder="出発地（例: 東京、HND）"
             required
           />
           <div className="grid grid-cols-2 gap-2">
