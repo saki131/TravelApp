@@ -66,7 +66,8 @@ def today_sales(db: Session = Depends(get_db)):
 def get_sale(sale_id: uuid.UUID, db: Session = Depends(get_db)):
     """セール詳細。"""
     from fastapi import HTTPException
-    event = db.query(SaleEvent).filter(SaleEvent.id == sale_id).first()
+    # id は String(36) で保存されているため文字列に変換して比較
+    event = db.query(SaleEvent).filter(SaleEvent.id == str(sale_id)).first()
     if not event:
         raise HTTPException(status_code=404, detail="Sale not found")
     return event

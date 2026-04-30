@@ -206,7 +206,7 @@ export default function SaleCalendarPage() {
             ) : selectedSales.length === 0 ? (
               <p className="text-center text-gray-400 py-6 text-sm">この日に開催中のセールはありません</p>
             ) : (
-              <div className="space-y-2">
+              <div className="flex flex-col gap-2">
                 {selectedSales.map((sale) => <SaleCard key={sale.id} sale={sale} />)}
               </div>
             )}
