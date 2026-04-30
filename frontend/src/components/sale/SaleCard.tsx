@@ -33,11 +33,11 @@ function fmt(s: string): string {
   return new Date(s).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
 }
 
-/** 購入期間の表示文字列とラベルを返す */
+/** 予約期間の表示文字列とラベルを返す */
 function bookingInfo(start?: string | null, end?: string | null): { label: string; text: string } | null {
-  if (start && end) return { label: "購入期間", text: `${fmt(start)}〜${fmt(end)}` };
+  if (start && end) return { label: "予約期間", text: `${fmt(start)}〜${fmt(end)}` };
   if (end)          return { label: "予約締切", text: `${fmt(end)}まで` };
-  if (start)        return { label: "購入開始", text: `${fmt(start)}〜` };
+  if (start)        return { label: "予約開始", text: `${fmt(start)}〜` };
   return null;
 }
 
@@ -98,7 +98,7 @@ export default function SaleCard({ sale }: { sale: SaleEvent }) {
           ) : (
             <div className="flex items-center gap-1 text-[11px] text-gray-400">
               <ShoppingCart size={11} className="shrink-0" />
-              <span>購入期間: 未確認</span>
+              <span>予約期間: 未確認</span>
             </div>
           )}
           {travel ? (
