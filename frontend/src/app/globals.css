@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bottom-nav-height: 64px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", sans-serif;
+  background-color: #f8fafc;
+}
+
+/* スマホ用にボトムナビ分パディング */
+main {
+  padding-bottom: var(--bottom-nav-height);
+}

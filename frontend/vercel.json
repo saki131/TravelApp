@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://travelapp-backend-195744982788.asia-northeast1.run.app/api/:path*"
+    }
+  ]
+}
