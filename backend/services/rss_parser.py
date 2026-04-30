@@ -13,25 +13,25 @@ import httpx
 logger = logging.getLogger(__name__)
 
 RSS_FEEDS = {
-    "jal_rss": "https://www.jal.co.jp/jp/ja/info/feeds/sale.rss",
-    "ana_rss": "https://www.ana.co.jp/ja/jp/rssfeed/news_sale.rss",
-    "peach_rss": "https://www.flypeach.com/en/news/feed",
-    "jetstar_rss": "https://www.jetstar.com/jp/ja/api/news-feed/rss",
+    "jal_rss":     "https://www.jal.co.jp/info/feeds/sale.rss?r=inbound",
+    "peach_rss":   "https://www.flypeach.com/ja/news/feed",
+    "spring_rss":  "https://www.springjapan.com/en/feed/",
+    "jetstar_rss": "https://www.jetstar.com/jp/ja/deals/feed",
 }
 
 CATEGORY_MAP = {
-    "jal_rss": "flight",
-    "ana_rss": "flight",
-    "peach_rss": "flight",
-    "jetstar_rss": "flight",
+    "jal_rss":    "flight",
+    "peach_rss":  "flight",
+    "spring_rss": "flight",
+    "jetstar_rss":"flight",
 }
 
 
 async def fetch_rss_entries(feed_key: str, url: str) -> list[dict]:
     """単一 RSS フィードを取得し、SaleEvent 用の dict リストを返す。"""
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, headers={"User-Agent": "TravelApp RSS Collector/1.0"})
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 TravelApp RSS/1.0"})
             resp.raise_for_status()
             content = resp.text
     except Exception as e:

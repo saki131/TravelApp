@@ -3,79 +3,120 @@ Gemini Flash ラッパー
 - AI 旅行プランナー
 - Google Search グラウンディング（セール検知）
 """
+import asyncio
+import itertools
 import json
 import logging
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
+# ラウンドロビン用カウンター
+_key_counter = itertools.count()
+
+
+def _get_api_keys() -> list[str]:
+    """設定済みの Gemini API キーをリストで返す（空キーは除外）"""
+    keys = [
+        settings.GEMINI_API_KEY,
+        settings.GEMINI_API_KEY_2,
+        settings.GEMINI_API_KEY_3,
+    ]
+    return [k for k in keys if k]
+
+
+async def _generate_with_key_rotation(model: str, contents, config_obj=None):
+    """
+    ラウンドロビンで API キーを均等分散し、
+    レート制限(429)時は自動的に次のキーへフォールバック。
+    """
+    keys = _get_api_keys()
+    if not keys:
+        raise RuntimeError("Gemini API キーが設定されていません")
+
+    start = next(_key_counter) % len(keys)
+    ordered = keys[start:] + keys[:start]
+
+    last_exc: Exception = RuntimeError("unknown")
+    for i, key in enumerate(ordered):
+        key_num = keys.index(key) + 1
+        client = genai.Client(api_key=key)
+        try:
+            logger.info("Gemini API 呼び出し: キー%d/%d, model=%s", key_num, len(keys), model)
+            kwargs = dict(model=model, contents=contents)
+            if config_obj is not None:
+                kwargs["config"] = config_obj
+            resp = client.models.generate_content(**kwargs)
+            logger.info("Gemini API 成功: キー%d", key_num)
+            return resp
+        except Exception as e:
+            last_exc = e
+            err_str = str(e)
+            is_rate = (
+                "429" in err_str
+                or "RATE_LIMIT" in err_str
+                or "quota" in err_str.lower()
+                or "RESOURCE_EXHAUSTED" in err_str
+            )
+            if is_rate and i < len(ordered) - 1:
+                logger.warning("Gemini キー%d がレート制限、次のキーへ切替", key_num)
+                continue
+            raise
+    raise last_exc
+
+
 FLASH_SALE_PROMPT = """
 以下の航空会社・旅行会社のフラッシュセール・タイムセール情報をGoogle検索で調べ、
-現在開催中または本日発表されたセール情報を JSON 形式で返してください。
+現在開催中または近日発表されたセール情報を JSON 形式で返してください。
 
 調査対象: JAL, ANA, Peach, Jetstar, Spring Japan, HIS, JTB
 
-返却形式（JSON配列）:
+返却形式（JSON配列のみ、前後に余分なテキスト不要）:
 [
-  {{
+  {
     "title": "セール名",
-    "category": "flight|hotel|package",
+    "category": "flight",
     "description": "セール概要（100字以内）",
     "sale_end": "YYYY-MM-DD または null",
     "travel_start": "YYYY-MM-DD または null",
     "travel_end": "YYYY-MM-DD または null",
     "min_price_jpy": 数値または null,
     "discount_rate": 数値(%)または null,
-    "target_routes": ["HND-OKA"] または null,
+    "target_routes": null,
     "booking_url": "公式URL",
-    "source": "会社名",
-    "coupon_code": "コードまたは null"
-  }}
+    "source": "会社名（例: peach, jetstar, ana, jal）",
+    "coupon_code": null
+  }
 ]
 
 見つからない場合は空の配列 [] を返してください。
 """
 
 
-def _init_model():
-    if not settings.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY が未設定のため Gemini 機能は無効です")
-        return None
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        generation_config=genai.GenerationConfig(
-            temperature=0.1,
-            response_mime_type="application/json",
-        ),
-    )
-
-
-_model: Optional[object] = None
-
-
-def get_model():
-    global _model
-    if _model is None:
-        _model = _init_model()
-    return _model
-
-
 async def detect_flash_sales() -> list[dict]:
     """Google Search グラウンディングでフラッシュセールを検知する。"""
-    model = get_model()
-    if model is None:
+    if not _get_api_keys():
         return []
     try:
-        response = model.generate_content(
-            FLASH_SALE_PROMPT,
-            tools=[{"google_search_retrieval": {}}],
+        response = await _generate_with_key_rotation(
+            model="gemini-2.0-flash-lite",
+            contents=FLASH_SALE_PROMPT,
+            config_obj=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.1,
+            ),
         )
         raw = response.text.strip()
+        # コードブロック除去
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
         data = json.loads(raw)
         if not isinstance(data, list):
             return []
@@ -93,8 +134,7 @@ async def generate_travel_plan(
     flight_info: Optional[dict] = None,
 ) -> str:
     """AI 旅行プランを生成する（Markdown テキストを返す）。"""
-    model = get_model()
-    if model is None:
+    if not _get_api_keys():
         return "AI 機能が現在利用できません（APIキー未設定）。"
 
     flight_context = ""
@@ -120,7 +160,11 @@ async def generate_travel_plan(
 実際に行動できる具体的な内容を心がけてください。
 """
     try:
-        response = model.generate_content(prompt)
+        response = await _generate_with_key_rotation(
+            model="gemini-2.0-flash-lite",
+            contents=prompt,
+            config_obj=types.GenerateContentConfig(temperature=0.7),
+        )
         return response.text
     except Exception as e:
         logger.error("Gemini travel plan generation failed: %s", e)

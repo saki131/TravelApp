@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     TRIPCOM_AFFILIATE_ID: str = ""
     TRIPCOM_API_KEY: str = ""
 
-    # Gemini AI
+    # Gemini AI（レート制限対策: 最大3キーをローテーション）
     GEMINI_API_KEY: str = ""
+    GEMINI_API_KEY_2: str = ""
+    GEMINI_API_KEY_3: str = ""
 
     # Web Push (VAPID)
     WEBPUSH_VAPID_PRIVATE_KEY: str = ""

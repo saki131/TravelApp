@@ -13,6 +13,6 @@ apscheduler
 feedparser
 beautifulsoup4
 lxml
-google-generativeai
+google-genai
 pywebpush
 cryptography
