@@ -195,17 +195,18 @@ class SerpApiClient:
         """
         SerpApi Google Travel Explore レスポンスを
         Amadeus Flight Destinations 互換の形式に変換する。
+        実際のレスポンス構造:
+          destination_airport.code  → IATAコード
+          flight_price              → 価格(JPY整数)
+          start_date                → 出発日
         """
         data = []
         for item in raw.get("destinations", []):
             try:
-                destination = item.get("airport_code") or item.get("id", "")
-                price = item.get("flight", {}).get("price") or item.get("price")
-                dep_date = (
-                    item.get("flight", {}).get("departure_date")
-                    or item.get("date")
-                    or date.today().isoformat()
-                )
+                airport = item.get("destination_airport") or {}
+                destination = airport.get("code", "")
+                price = item.get("flight_price")
+                dep_date = item.get("start_date") or date.today().isoformat()
                 if destination and price is not None:
                     data.append({
                         "destination": destination,
