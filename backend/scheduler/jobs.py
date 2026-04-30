@@ -5,7 +5,7 @@ Cloud Scheduler → POST /internal/jobs/{job_name} → APScheduler が即時実�
 import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as date_type
 
 import httpx
 from sqlalchemy.orm import Session
@@ -32,6 +32,73 @@ _OFFICIAL_DOMAINS = {
     "jal":          ["jal.co.jp"],
     "ana":          ["ana.co.jp"],
 }
+
+# 搭乗・旅行期間を示すキーワード
+_TRAVEL_KW = ['搭乗', '旅行', '出発', '利用', 'travel']
+# 予約期間を示すキーワード
+_BOOKING_KW = ['予約', '購入', '販売', 'セール', 'タイムセール', 'sale', '申込', 'booking']
+
+
+def _infer_year(m: int, d: int, now: datetime) -> int:
+    """6ヶ月以内の過去日・未来日に最も近い年を返す。"""
+    for year in [now.year, now.year + 1]:
+        try:
+            dt = datetime(year, m, d, tzinfo=timezone.utc)
+            if dt < now and (now - dt).days > 180:
+                continue
+            return year
+        except ValueError:
+            pass
+    return now.year
+
+
+def _extract_dates(text: str) -> dict:
+    """snippet テキストから sale_start / sale_end / travel_start / travel_end を抽出する。"""
+    now = datetime.now(timezone.utc)
+    result: dict = {}
+
+    def parse_dt(mo: str, dy: str) -> datetime | None:
+        try:
+            m, d = int(mo), int(dy)
+            if not (1 <= m <= 12 and 1 <= d <= 31):
+                return None
+            return datetime(_infer_year(m, d, now), m, d, tzinfo=timezone.utc)
+        except (ValueError, OverflowError):
+            return None
+
+    def is_travel(pos: int) -> bool:
+        ctx = text[max(0, pos - 15):pos + 15]
+        return any(kw in ctx for kw in _TRAVEL_KW)
+
+    # パターン1: 範囲 M/D〜M/D または M月D日〜M月D日
+    for m in re.finditer(r'(\d{1,2})[/月](\d{1,2})日?\s*[〞~～\-]　?\s*(\d{1,2})[/月](\d{1,2})', text):
+        s, e = parse_dt(m.group(1), m.group(2)), parse_dt(m.group(3), m.group(4))
+        if s and e:
+            if is_travel(m.start()):
+                result.setdefault('travel_start', s.date())
+                result.setdefault('travel_end', e.date())
+            else:
+                result.setdefault('sale_start', s)
+                result.setdefault('sale_end', e)
+
+    # パターン2: 〜M/Dまで (終了のみ)
+    for m in re.finditer(r'[〞~～]?\s*(\d{1,2})[/月](\d{1,2})日?\s*(?:まで|迄)', text):
+        e = parse_dt(m.group(1), m.group(2))
+        if e:
+            if is_travel(m.start()):
+                result.setdefault('travel_end', e.date())
+            else:
+                result.setdefault('sale_end', e)
+
+    # パターン3: 単一日付 M/D または M月D日 (未分類 → sale_end)
+    if 'sale_end' not in result:
+        m = re.search(r'(\d{1,2})[/月](\d{1,2})', text)
+        if m:
+            e = parse_dt(m.group(1), m.group(2))
+            if e:
+                result['sale_end'] = e
+
+    return result
 
 
 def _get_db() -> Session:
@@ -69,22 +136,17 @@ async def _search_sale(source: str, query: str) -> list[dict]:
             except Exception:
                 pass
 
-        sale_end = None
-        date_match = re.search(r"(\d{1,2})[/月](\d{1,2})", snippet)
-        if date_match:
-            try:
-                m, d_num = int(date_match.group(1)), int(date_match.group(2))
-                now = datetime.now(timezone.utc)
-                year = now.year if m >= now.month else now.year + 1
-                sale_end = datetime(year, m, d_num, tzinfo=timezone.utc)
-            except Exception:
-                pass
+        # 日付抽出（強化版）
+        dates = _extract_dates(snippet)
 
         results.append({
             "category": "flight",
             "title": title[:200],
             "description": snippet[:500] if snippet else None,
-            "sale_end": sale_end,
+            "sale_start": dates.get("sale_start"),
+            "sale_end":   dates.get("sale_end"),
+            "travel_start": dates.get("travel_start"),
+            "travel_end":   dates.get("travel_end"),
             "min_price_jpy": min_price,
             "booking_url": link,
             "source": source,
@@ -127,7 +189,10 @@ async def job_collect_rss():
                 # タイトル・説明を最新に更新
                 exists.title = entry["title"]
                 exists.description = entry.get("description")
-                exists.sale_end = entry.get("sale_end")
+                exists.sale_start  = entry.get("sale_start")
+                exists.sale_end    = entry.get("sale_end")
+                exists.travel_start = entry.get("travel_start")
+                exists.travel_end   = entry.get("travel_end")
                 exists.min_price_jpy = entry.get("min_price_jpy")
             else:
                 event = SaleEvent(**{k: v for k, v in entry.items() if hasattr(SaleEvent, k)})

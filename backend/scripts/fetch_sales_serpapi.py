@@ -1,11 +1,10 @@
 """SerpApi Google検索で実際のセール情報を取得・保存するスクリプト"""
 import asyncio
 import hashlib
-import json
 import os
+import re
 import sys
-import uuid
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, date as date_type
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
@@ -14,6 +13,67 @@ load_dotenv()
 import httpx
 
 SERPAPI_KEY = os.environ.get("SERPAPI_KEY", "")
+
+_TRAVEL_KW = ['搭乗', '旅行', '出発', '利用', 'travel']
+
+def _infer_year(m: int, d: int, now: datetime) -> int:
+    for year in [now.year, now.year + 1]:
+        try:
+            dt = datetime(year, m, d, tzinfo=timezone.utc)
+            if dt < now and (now - dt).days > 180:
+                continue
+            return year
+        except ValueError:
+            pass
+    return now.year
+
+def _extract_dates(text: str) -> dict:
+    """snippet テキストから sale_start / sale_end / travel_start / travel_end を抽出する。"""
+    now = datetime.now(timezone.utc)
+    result: dict = {}
+
+    def parse_dt(mo: str, dy: str) -> datetime | None:
+        try:
+            m, d = int(mo), int(dy)
+            if not (1 <= m <= 12 and 1 <= d <= 31):
+                return None
+            return datetime(_infer_year(m, d, now), m, d, tzinfo=timezone.utc)
+        except (ValueError, OverflowError):
+            return None
+
+    def is_travel(pos: int) -> bool:
+        ctx = text[max(0, pos - 15):pos + 15]
+        return any(kw in ctx for kw in _TRAVEL_KW)
+
+    # パターン1: 範囲 M/D〜M/D または M月D日〜M月D日
+    for m in re.finditer(r'(\d{1,2})[/月](\d{1,2})日?\s*[〜~～\-]　?\s*(\d{1,2})[/月](\d{1,2})', text):
+        s, e = parse_dt(m.group(1), m.group(2)), parse_dt(m.group(3), m.group(4))
+        if s and e:
+            if is_travel(m.start()):
+                result.setdefault('travel_start', s.date())
+                result.setdefault('travel_end', e.date())
+            else:
+                result.setdefault('sale_start', s)
+                result.setdefault('sale_end', e)
+
+    # パターン2: 〜M/Dまで (終了のみ)
+    for m in re.finditer(r'[〜~～]?\s*(\d{1,2})[/月](\d{1,2})日?\s*(?:まで|迄)', text):
+        e = parse_dt(m.group(1), m.group(2))
+        if e:
+            if is_travel(m.start()):
+                result.setdefault('travel_end', e.date())
+            else:
+                result.setdefault('sale_end', e)
+
+    # パターン3: 単一日付 M/D (未分類 → sale_end)
+    if 'sale_end' not in result:
+        m = re.search(r'(\d{1,2})[/月](\d{1,2})', text)
+        if m:
+            e = parse_dt(m.group(1), m.group(2))
+            if e:
+                result['sale_end'] = e
+
+    return result
 
 # セール検索クエリ一覧
 SALE_QUERIES = [
@@ -63,7 +123,6 @@ async def search_sales(source: str, query: str) -> list[dict]:
         is_official = any(d in link for d in official_domains)
 
         # 価格の抽出（スニペットから）
-        import re
         price_match = re.search(r"[¥￥]?(\d{1,3}(?:,\d{3})*|\d{3,6})\s*円", snippet)
         min_price = None
         if price_match:
@@ -72,25 +131,18 @@ async def search_sales(source: str, query: str) -> list[dict]:
             except Exception:
                 pass
 
-        # 終了日の抽出
-        date_match = re.search(r"(\d{1,2})[/月](\d{1,2})", snippet)
-        sale_end = None
-        if date_match:
-            try:
-                m, d_num = int(date_match.group(1)), int(date_match.group(2))
-                # 年の判定
-                now = datetime.now(timezone.utc)
-                year = now.year if m >= now.month else now.year + 1
-                sale_end = datetime(year, m, d_num, tzinfo=timezone.utc)
-            except Exception:
-                pass
+        # 日付抽出（強化版）
+        dates = _extract_dates(snippet)
 
         ext_id = hashlib.md5(link.encode()).hexdigest()
         results.append({
             "category": "flight",
             "title": title[:200],
             "description": snippet[:500] if snippet else None,
-            "sale_end": sale_end,
+            "sale_start":   dates.get("sale_start"),
+            "sale_end":     dates.get("sale_end"),
+            "travel_start": dates.get("travel_start"),
+            "travel_end":   dates.get("travel_end"),
             "min_price_jpy": min_price,
             "booking_url": link,
             "source": source,
