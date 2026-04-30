@@ -64,11 +64,13 @@ export default function SaleCalendarPage() {
     const year = calMonth.getFullYear();
     const month = calMonth.getMonth();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
+    // sale_start が null の場合は月初を起点にする（-Infinity にしない）
+    const monthStartMs = new Date(year, month, 1).getTime();
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const dayMs = new Date(dateStr).getTime();
       map[dateStr] = items.filter((s) => {
-        const start = isoToDate(s.sale_start)?.getTime() ?? -Infinity;
+        const start = isoToDate(s.sale_start)?.getTime() ?? monthStartMs;
         const end = isoToDate(s.sale_end)?.getTime() ?? Infinity;
         return dayMs >= start && dayMs <= end;
       });

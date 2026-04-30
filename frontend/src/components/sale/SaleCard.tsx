@@ -29,12 +29,23 @@ const SOURCE_COLOR: Record<string, string> = {
   jtb:           "bg-purple-100 text-purple-700",
 };
 
-function fmtRange(start?: string | null, end?: string | null): string | null {
-  const fmt = (s: string) =>
-    new Date(s).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
-  if (start && end) return `${fmt(start)}〜${fmt(end)}`;
-  if (end)          return `〜${fmt(end)}`;
-  if (start)        return `${fmt(start)}〜`;
+function fmt(s: string): string {
+  return new Date(s).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" });
+}
+
+/** 購入期間の表示文字列とラベルを返す */
+function bookingInfo(start?: string | null, end?: string | null): { label: string; text: string } | null {
+  if (start && end) return { label: "購入期間", text: `${fmt(start)}〜${fmt(end)}` };
+  if (end)          return { label: "予約締切", text: `${fmt(end)}まで` };
+  if (start)        return { label: "購入開始", text: `${fmt(start)}〜` };
+  return null;
+}
+
+/** 搭乗期間の表示文字列とラベルを返す */
+function travelInfo(start?: string | null, end?: string | null): { label: string; text: string } | null {
+  if (start && end) return { label: "搭乗期間", text: `${fmt(start)}〜${fmt(end)}` };
+  if (end)          return { label: "搭乗締切", text: `${fmt(end)}まで` };
+  if (start)        return { label: "搭乗開始", text: `${fmt(start)}〜` };
   return null;
 }
 
@@ -43,11 +54,19 @@ export default function SaleCard({ sale }: { sale: SaleEvent }) {
   const Icon = meta.icon;
   const airlineName = SOURCE_LABEL[sale.source] ?? sale.source;
   const airlineColor = SOURCE_COLOR[sale.source] ?? "bg-gray-100 text-gray-600";
-  const bookingRange = fmtRange(sale.sale_start, sale.sale_end);
-  const travelRange  = fmtRange(sale.travel_start, sale.travel_end);
+  const booking = bookingInfo(sale.sale_start, sale.sale_end);
+  const travel  = travelInfo(sale.travel_start, sale.travel_end);
+
+  // 予約締切が過去かどうか
+  const isExpired = sale.sale_end ? new Date(sale.sale_end) < new Date() : false;
 
   return (
-    <div className={`rounded-xl border flex flex-col ${meta.bg} ${meta.border}`}>
+    <div className={`rounded-xl border flex flex-col ${meta.bg} ${meta.border} ${isExpired ? "opacity-60" : ""}`}>
+      {isExpired && (
+        <div className="text-center text-[10px] font-semibold text-white bg-gray-400 rounded-t-xl px-2 py-0.5">
+          受付終了
+        </div>
+      )}
       {/* カード本体 → 詳細ページへ */}
       <Link
         href={`/sales/${sale.id}`}
@@ -70,18 +89,28 @@ export default function SaleCard({ sale }: { sale: SaleEvent }) {
 
         {/* 購入期間・搭乗期間 */}
         <div className="space-y-0.5">
-          {bookingRange && (
+          {booking ? (
             <div className="flex items-center gap-1 text-[11px] text-gray-600">
               <ShoppingCart size={11} className="shrink-0 text-gray-400" />
-              <span className="font-medium text-gray-500">購入</span>
-              <span>{bookingRange}</span>
+              <span className="font-medium text-gray-500 shrink-0">{booking.label}</span>
+              <span className={isExpired ? "line-through text-gray-400" : ""}>{booking.text}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 text-[11px] text-gray-400">
+              <ShoppingCart size={11} className="shrink-0" />
+              <span>購入期間: 未確認</span>
             </div>
           )}
-          {travelRange && (
+          {travel ? (
             <div className="flex items-center gap-1 text-[11px] text-gray-600">
               <MapPin size={11} className="shrink-0 text-gray-400" />
-              <span className="font-medium text-gray-500">搭乗</span>
-              <span>{travelRange}</span>
+              <span className="font-medium text-gray-500 shrink-0">{travel.label}</span>
+              <span>{travel.text}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 text-[11px] text-gray-400">
+              <MapPin size={11} className="shrink-0" />
+              <span>搭乗期間: 未確認</span>
             </div>
           )}
         </div>
