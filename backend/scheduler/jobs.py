@@ -229,6 +229,7 @@ async def job_gemini_grounding():
                 category=s.get("category", "flight"),
                 title=title,
                 description=s.get("description"),
+                sale_start=_parse_date(s.get("sale_start")),
                 sale_end=_parse_date(s.get("sale_end")),
                 travel_start=_parse_date(s.get("travel_start")),
                 travel_end=_parse_date(s.get("travel_end")),

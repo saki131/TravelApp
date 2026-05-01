@@ -70,60 +70,83 @@ async def _generate_with_key_rotation(model: str, contents, config_obj=None):
     raise last_exc
 
 
-FLASH_SALE_PROMPT = """
-以下の航空会社・旅行会社のフラッシュセール・タイムセール情報をGoogle検索で調べ、
-現在開催中または近日発表されたセール情報を JSON 形式で返してください。
+def _make_sale_prompt(source: str, airline_name: str, query_hint: str) -> str:
+    return f"""
+今日の日付は {__import__('datetime').date.today()} です。
+Google検索で「{query_hint}」を調べ、**現在開催中または近日開催予定**のセール・タイムセール情報を探してください。
 
-調査対象: JAL, ANA, Peach, Jetstar, Spring Japan, HIS, JTB
+必ず公式サイト（{airline_name}の公式ドメイン）の情報を優先して参照してください。
 
-返却形式（JSON配列のみ、前後に余分なテキスト不要）:
+見つかった情報を以下のJSON配列のみで返してください（前後に説明文不要）:
 [
-  {
-    "title": "セール名",
+  {{
+    "title": "セール名（公式サイトの表記に合わせる）",
     "category": "flight",
-    "description": "セール概要（100字以内）",
-    "sale_end": "YYYY-MM-DD または null",
-    "travel_start": "YYYY-MM-DD または null",
-    "travel_end": "YYYY-MM-DD または null",
-    "min_price_jpy": 数値または null,
-    "discount_rate": 数値(%)または null,
-    "target_routes": null,
-    "booking_url": "公式URL",
-    "source": "会社名（例: peach, jetstar, ana, jal）",
-    "coupon_code": null
-  }
+    "description": "セール概要（150字以内、予約期間・搭乗期間・対象路線を含める）",
+    "sale_start": "予約受付開始日 YYYY-MM-DD、不明なら null",
+    "sale_end": "予約締切日 YYYY-MM-DD、不明なら null",
+    "travel_start": "搭乗・旅行開始日 YYYY-MM-DD、不明なら null",
+    "travel_end": "搭乗・旅行終了日 YYYY-MM-DD、不明なら null",
+    "min_price_jpy": 片道最低価格（整数・円）または null,
+    "discount_rate": 割引率（整数・%）または null,
+    "booking_url": "セールページの公式URL",
+    "source": "{source}",
+    "coupon_code": "クーポンコードまたは null"
+  }}
 ]
 
-見つからない場合は空の配列 [] を返してください。
+セール情報が見つからない場合は [] を返してください。
+日付が明記されていない場合は必ず null にしてください（推測で埋めないこと）。
 """
 
 
+# 航空会社ごとの検索ヒント
+_AIRLINE_TARGETS = [
+    ("peach",        "Peach Aviation",  "ピーチ タイムセール 予約期間 搭乗期間 site:flypeach.com"),
+    ("jetstar",      "Jetstar Japan",   "ジェットスター セール 予約期間 搭乗期間 site:jetstar.com"),
+    ("spring_japan", "Spring Japan",    "スプリングジャパン セール 予約期間 搭乗期間 site:ch.com OR site:spring-japan.co.jp"),
+    ("jal",          "JAL",             "JAL タイムセール 特割 予約期間 搭乗期間 site:jal.co.jp"),
+    ("ana",          "ANA",             "ANA タイムセール スーパーバリュー 予約期間 搭乗期間 site:ana.co.jp"),
+]
+
+
 async def detect_flash_sales() -> list[dict]:
-    """Google Search グラウンディングでフラッシュセールを検知する。"""
+    """Gemini Google Search グラウンディングで航空会社ごとにセールを検索する。"""
     if not _get_api_keys():
         return []
-    try:
-        response = await _generate_with_key_rotation(
-            model="gemini-2.0-flash-lite",
-            contents=FLASH_SALE_PROMPT,
-            config_obj=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.1,
-            ),
-        )
-        raw = response.text.strip()
-        # コードブロック除去
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        data = json.loads(raw)
-        if not isinstance(data, list):
-            return []
-        return data
-    except Exception as e:
-        logger.error("Gemini flash sale detection failed: %s", e)
-        return []
+
+    all_results: list[dict] = []
+    for source, airline_name, query_hint in _AIRLINE_TARGETS:
+        prompt = _make_sale_prompt(source, airline_name, query_hint)
+        try:
+            response = await _generate_with_key_rotation(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config_obj=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.0,
+                ),
+            )
+            raw = response.text.strip()
+            # コードブロック除去
+            if "```" in raw:
+                parts = raw.split("```")
+                raw = parts[1] if len(parts) > 1 else parts[0]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            # JSON部分だけ抽出
+            s = raw.find("[")
+            e = raw.rfind("]")
+            if s != -1 and e != -1:
+                raw = raw[s:e+1]
+            data = json.loads(raw)
+            if isinstance(data, list):
+                logger.info("Gemini sale detect [%s]: %d件", source, len(data))
+                all_results.extend(data)
+        except Exception as ex:
+            logger.warning("Gemini sale detect [%s] failed: %s", source, ex)
+
+    return all_results
 
 
 async def generate_travel_plan(
